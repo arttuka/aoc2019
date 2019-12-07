@@ -12,8 +12,12 @@ data Parameter = Parameter Int Int
 type OperationBody = [Parameter] -> Program -> Input -> Output -> PartialState
 type Operation = Counter -> [Mode] -> Program -> Input -> Output -> State
 data State = Run Counter Program Input Output | Stop Int Output
-data PartialState = PartialState Program Input Output
+data PartialState = PartialState (Maybe Counter) Program Input Output
 data Result = Result Int Output deriving (Show)
+
+orElse :: Maybe a -> a -> a
+orElse Nothing value = value
+orElse (Just value) _ = value
 
 replaceNth :: Int -> a -> [a] -> [a]
 replaceNth _ _ [] = []
@@ -49,25 +53,42 @@ counterAdd :: Counter -> Int -> Counter
 counterAdd (Counter counter) n = Counter $ counter + n
 
 makeOperation :: Int -> OperationBody -> Operation
-makeOperation n f counter modes program input output = Run (counterAdd counter (n + 1)) newProgram newInput newOutput
+makeOperation n f counter modes program input output = Run newCounter newProgram newInput newOutput
   where
     parameters = getParameters counter n modes program
-    (PartialState newProgram newInput newOutput) = f parameters program input output
+    (PartialState maybeCounter newProgram newInput newOutput) = f parameters program input output
+    newCounter = maybeCounter `orElse` counterAdd counter (n + 1)
 
 add :: OperationBody
-add [Parameter _ i, Parameter _ j, k] program = PartialState newProgram
+add [Parameter _ i, Parameter _ j, k] program = PartialState Nothing newProgram
   where newProgram = saveValue k (i + j) program
 
 mult :: OperationBody
-mult [Parameter _ i, Parameter _ j, k] program = PartialState newProgram
+mult [Parameter _ i, Parameter _ j, k] program = PartialState Nothing newProgram
   where newProgram = saveValue k (i * j) program
 
 save :: OperationBody
-save [i] program (input:inputs) = PartialState newProgram inputs
+save [i] program (input:inputs) = PartialState Nothing newProgram inputs
   where newProgram = saveValue i input program
 
 output :: OperationBody
-output [Parameter _ value] program inputs outputs = PartialState program inputs (value : outputs)
+output [Parameter _ value] program inputs outputs = PartialState Nothing program inputs (value : outputs)
+
+jumpIfTrue :: OperationBody
+jumpIfTrue [Parameter _ i, Parameter _ j] = PartialState newCounter
+  where newCounter = if i /= 0 then Just (Counter j) else Nothing
+
+jumpIfFalse :: OperationBody
+jumpIfFalse [Parameter _ i, Parameter _ j] = PartialState newCounter
+  where newCounter = if i == 0 then Just (Counter j) else Nothing
+
+lessThan :: OperationBody
+lessThan [Parameter _ i, Parameter _ j, k] program = PartialState Nothing newProgram
+  where newProgram = saveValue k (if i < j then 1 else 0) program
+
+equals :: OperationBody
+equals [Parameter _ i, Parameter _ j, k] program = PartialState Nothing newProgram
+  where newProgram = saveValue k (if i == j then 1 else 0) program
 
 addOp :: Operation
 addOp = makeOperation 3 add
@@ -81,6 +102,18 @@ saveOp = makeOperation 1 save
 outputOp :: Operation
 outputOp = makeOperation 1 output
 
+jumpIfTrueOp :: Operation
+jumpIfTrueOp = makeOperation 2 jumpIfTrue
+
+jumpIfFalseOp :: Operation
+jumpIfFalseOp = makeOperation 2 jumpIfFalse
+
+lessThanOp :: Operation
+lessThanOp = makeOperation 3 lessThan
+
+equalsOp :: Operation
+equalsOp = makeOperation 3 equals
+
 step :: Counter -> Program -> Input -> Output -> State
 step counter program inputs outputs = 
   if opcode == 99
@@ -93,6 +126,10 @@ step counter program inputs outputs =
       2 -> multOp
       3 -> saveOp
       4 -> outputOp
+      5 -> jumpIfTrueOp
+      6 -> jumpIfFalseOp
+      7 -> lessThanOp
+      8 -> equalsOp
 
 doRun :: State -> Result
 doRun (Run counter program input output) = doRun $ step counter program input output

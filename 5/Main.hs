@@ -13,5 +13,6 @@ readCode = fmap (fmap toInt . splitOn ",") getContents
 
 main :: IO ()
 main = do program <- readCode
-          let result = runProgram program [1]
+          print program
+          let result = runProgram program [5]
           print result
