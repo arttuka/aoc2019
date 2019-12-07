@@ -12,16 +12,21 @@ toInt s = read s :: Int
 readCode :: IO [Int]
 readCode = fmap (fmap toInt . splitOn ",") getContents
 
-settings :: [[Int]]
-settings = permutations [0, 1, 2, 3, 4]
+rotate :: [a] -> [a]
+rotate lst = last lst : init lst
 
-runProgramWithSettings :: Program -> Int -> [Int] -> Int
-runProgramWithSettings _ input [] = input
-runProgramWithSettings program input (x:xs) = runProgramWithSettings program nextInput xs
-  where
-    (Result _ [nextInput]) = runProgram program [x, input]
+settings :: [[Int]]
+settings = permutations [5, 6, 7, 8, 9]
+
+runAmplifiersWithSettings :: Program -> [Int] -> Int
+runAmplifiersWithSettings program (sA:settings) =
+  let n = length settings
+      inputA = sA : 0 : last outputs
+      inputs = inputA : zipWith (:) settings (take n outputs)
+      outputs = map (runProgram program) inputs
+  in last (last outputs)
     
 main :: IO ()
 main = do program <- readCode
-          let result = maximum $ map (runProgramWithSettings program 0) settings
+          let result = maximum $ map (runAmplifiersWithSettings program) settings
           print result
