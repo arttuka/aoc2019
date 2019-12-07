@@ -13,7 +13,7 @@ replaceNth i val (x:xs) = x : replaceNth (i - 1) val xs
 
 doOperation :: (Int -> Int -> Int) -> Int -> Int -> Int -> [Int] -> [Int]
 doOperation f i j k program = replaceNth k res program
-  where res = f (program!!i) (program!!j)
+  where res = f (program !! i) (program !! j)
 
 step :: Int -> [Int] -> State
 step counter program = case opcode of
@@ -38,7 +38,14 @@ toInt s = read s :: Int
 readCode :: IO [Int]
 readCode = fmap (fmap toInt . splitOn ",") getContents
 
+pairs :: [(Int, Int)]
+pairs = [(i, t - i) | t <- [0..], i <- [0..t]]
+
+runProgramWithInput :: [Int] -> (Int, Int) -> Int
+runProgramWithInput program (x, y) = runProgram $ Run 0 fixedProgram
+  where fixedProgram = replaceNth 1 x $ replaceNth 2 y program
+
 main :: IO ()
 main = do program <- readCode
-          let fixedProgram = replaceNth 1 12 $ replaceNth 2 2 program
-          print $ runProgram $ Run 0 fixedProgram
+          let results = takeWhile (/= 19690720) $ fmap (runProgramWithInput program) pairs
+          print $ pairs !! length results
