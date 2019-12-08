@@ -1,169 +1,146 @@
 module Intcode where
 
+import Prelude hiding (lookup)
 import Control.Applicative
 import Control.Monad
-import Data.List
+import Data.Either (either, isLeft, rights)
+import Data.List (foldl')
+import Data.Vector (Vector, (!), (//), slice, fromList, toList)
 
-type Program = [Int]
-type Output = [Int]
+type Program = Vector Int
 data Mode = Position | Immediate deriving (Enum)
-newtype Counter = Counter Int
 data Parameter = Parameter Int Int
-type OperationBody = [Parameter] -> Program -> Int -> OperationResult
-type Operation = Counter -> [Mode] -> Program -> Int -> [OperationResult]
-data OperationResult = NewProgram Program | NewCounter Counter | NewOutput Int | NoResult
-type RunState = (Counter, Program, Output)
-type State = Either Output RunState
-type InputState = Either Output (Int, RunState)
+type InstructionBody = [Parameter] -> Program -> InstructionResult
+data Instruction = Instruction Int InstructionBody
+data InstructionResult = NewProgram Program | NewPointer Int | NewOutput Int | NoResult
+type State = (Int, Program, [Int])
+type Result = Either [Int] State
+type Input = (Int, State)
 
-collectResults :: [State] -> [Output]
-collectResults [] = []
-collectResults (x:xs) = case x of
-  Right (_, _, output) -> output : collectResults xs
-  Left output -> [output]
+takeUntil :: (a -> Bool) -> [a] -> [a]
+takeUntil _ []  = []
+takeUntil p (x:xs)
+    | p x       = [x]
+    | otherwise = x : takeUntil p xs
+                  
+third :: (a, b, c) -> c
+third (_, _, c) = c
 
-addToEither :: c -> Either a b -> Either a (c, b)
-addToEither y = fmap (\ x -> (y, x))
+toOutput :: Result -> [Int]
+toOutput = either id third
 
-resetOutput :: RunState -> RunState
-resetOutput (counter, program, _) = (counter, program, [])
-
-orElse :: Maybe a -> a -> a
-orElse Nothing value = value
-orElse (Just value) _ = value
-
-replaceNth :: Int -> a -> [a] -> [a]
-replaceNth _ _ [] = []
-replaceNth 0 val (x:xs) = val:xs
-replaceNth i val (x:xs) = x : replaceNth (i - 1) val xs
-
-saveValue :: Parameter -> Int -> Program -> Program
-saveValue (Parameter index _) = replaceNth index
+resetOutput :: State -> State
+resetOutput (pointer, program, _) = (pointer, program, [])
 
 getModes :: Int -> [Mode]
 getModes 0 = repeat Position
 getModes i = toEnum (i `mod` 10) : getModes (i `div` 10)
 
-getOpcodeAndModes :: Counter -> Program -> (Int, [Mode])
-getOpcodeAndModes (Counter counter) program = (opcode, modes)
+getOpcodeAndModes :: Int -> Program -> (Int, [Mode])
+getOpcodeAndModes pointer program = (opcode, modes)
   where
-    i = program !! counter
+    i      = program ! pointer
     opcode = i `mod` 100
-    modes = getModes $ i `div` 100
+    modes  = getModes $ i `div` 100
 
-getParameter :: Program -> (Mode, Int) -> Parameter
-getParameter program (mode, n) = Parameter n value
+getParameter :: Program -> Mode -> Int -> Parameter
+getParameter program mode n = Parameter n value
   where
     value = case mode of
-      Position -> program !! n
+      Position  -> program ! n
       Immediate -> n
 
-getParameters :: Counter -> Int -> [Mode] -> Program -> [Parameter]
-getParameters (Counter counter) n modes program = getParameter program <$> zip modes values
-  where values = take n $ drop (counter + 1) program
-
-counterAdd :: Counter -> Int -> Counter
-counterAdd (Counter counter) n = Counter $ counter + n
-
-makeOperation :: Int -> OperationBody -> Operation
-makeOperation n f counter modes program input = results
+getParameters :: Int -> Int -> [Mode] -> Program -> [Parameter]
+getParameters pointer n modes program = zipWith (getParameter program) modes values
   where
-    parameters = getParameters counter n modes program
-    result = f parameters program input
-    defaultCounter = NewCounter $ counterAdd counter (n + 1)
-    results = case result of
-      NoResult     -> [defaultCounter]
-      NewCounter _ -> [result]
-      _            -> [defaultCounter, result]
+    values = toList $ slice (pointer + 1) n program
 
-add :: OperationBody
-add [Parameter _ i, Parameter _ j, k] program _ = NewProgram $ saveValue k (i + j) program
+saveValue :: Parameter -> Int -> Program -> InstructionResult
+saveValue (Parameter index _) value program = NewProgram $ program // [(index, value)]
 
-mult :: OperationBody
-mult [Parameter _ i, Parameter _ j, k] program _ = NewProgram $ saveValue k (i * j) program
-
-save :: OperationBody
-save [i] program input = NewProgram $ saveValue i input program
-
-output :: OperationBody
-output [Parameter _ value] program _ = NewOutput value
-
-jumpIfTrue :: OperationBody
-jumpIfTrue [Parameter _ i, Parameter _ j] _ _ = if i /= 0 then NewCounter (Counter j) else NoResult
-
-jumpIfFalse :: OperationBody
-jumpIfFalse [Parameter _ i, Parameter _ j] _ _ = if 1 == 0 then NewCounter (Counter j) else NoResult
-
-lessThan :: OperationBody
-lessThan [Parameter _ i, Parameter _ j, k] program _ = NewProgram $ saveValue k (if i < j then 1 else 0) program
-
-equals :: OperationBody
-equals [Parameter _ i, Parameter _ j, k] program _ = NewProgram $ saveValue k (if i == j then 1 else 0) program
-
-addOp :: Operation
-addOp = makeOperation 3 add
-
-multOp :: Operation
-multOp = makeOperation 3 mult
-
-saveOp :: Operation
-saveOp = makeOperation 1 save
-
-outputOp :: Operation
-outputOp = makeOperation 1 output
-
-jumpIfTrueOp :: Operation
-jumpIfTrueOp = makeOperation 2 jumpIfTrue
-
-jumpIfFalseOp :: Operation
-jumpIfFalseOp = makeOperation 2 jumpIfFalse
-
-lessThanOp :: Operation
-lessThanOp = makeOperation 3 lessThan
-
-equalsOp :: Operation
-equalsOp = makeOperation 3 equals
-
-applyResult :: RunState -> OperationResult -> RunState
-applyResult (counter, program, output) result = case result of
-  NewProgram newProgram -> (counter, newProgram, output)
-  NewCounter newCounter -> (newCounter, program, output)
-  NewOutput value       -> (counter, program, value : output)
-
-step :: RunState -> RunState
-step state@(counter, program, output) = foldl' applyResult state results
+saveInput :: Int -> Int -> Program -> [InstructionResult]
+saveInput pointer input program = results
   where
-    (opcode, modes) = getOpcodeAndModes counter program
-    operation = case opcode of
-      1 -> addOp
-      2 -> multOp
-      4 -> outputOp
-      5 -> jumpIfTrueOp
-      6 -> jumpIfFalseOp
-      7 -> lessThanOp
-      8 -> equalsOp
-    results = operation counter modes program 0
+    [parameter] = getParameters pointer 1 [Position] program
+    results     = [ saveValue parameter input program
+                  , NewPointer (pointer + 2)
+                  ]
 
-runUntilInput :: RunState -> State
-runUntilInput state@(counter, program, output) =
-  let (opcode, _) = getOpcodeAndModes counter program
-  in case opcode of
+noop = Instruction 0 (\_ _ -> NoResult)
+
+add :: InstructionBody
+add [Parameter _ i, Parameter _ j, k] = saveValue k (i + j)
+
+mult :: InstructionBody
+mult [Parameter _ i, Parameter _ j, k] = saveValue k (i * j)
+
+output :: InstructionBody
+output [Parameter _ value] _ = NewOutput value
+
+jumpIfTrue :: InstructionBody
+jumpIfTrue [Parameter _ i, Parameter _ j] _
+    | i /= 0    = NewPointer j
+    | otherwise = NoResult
+
+jumpIfFalse :: InstructionBody
+jumpIfFalse [Parameter _ i, Parameter _ j] _
+    | i == 0    = NewPointer j
+    | otherwise = NoResult
+
+lessThan :: InstructionBody
+lessThan [Parameter _ i, Parameter _ j, k] = saveValue k (if i < j then 1 else 0)
+
+equals :: InstructionBody
+equals [Parameter _ i, Parameter _ j, k] = saveValue k (if i == j then 1 else 0)
+
+instructions :: Vector Instruction
+instructions = fromList
+  [ noop
+  , Instruction 3 add
+  , Instruction 3 mult
+  , noop
+  , Instruction 1 output
+  , Instruction 2 jumpIfTrue
+  , Instruction 2 jumpIfFalse
+  , Instruction 3 lessThan
+  , Instruction 3 equals
+  ]
+
+applyResult :: State -> InstructionResult -> State
+applyResult (pointer, program, output) result = case result of
+  NewProgram newProgram -> (pointer, newProgram, output)
+  NewPointer newPointer -> (newPointer, program, output)
+  NewOutput value       -> (pointer, program, output ++ [value])
+
+step :: State -> State
+step state@(pointer, program, _) = foldl' applyResult state results
+  where
+    (opcode, modes)      = getOpcodeAndModes pointer program
+    (Instruction n inst) = instructions ! opcode 
+    parameters           = getParameters pointer n modes program
+    result               = inst parameters program
+    defaultPointer       = NewPointer $ pointer + n + 1
+    results              = case result of
+      NoResult     -> [defaultPointer]
+      NewPointer _ -> [result]
+      _            -> [defaultPointer, result]
+
+runUntilInput :: State -> Result
+runUntilInput state@(pointer, program, output) = case opcode of
     99 -> Left output
-    3 -> Right state
-    _ -> runUntilInput $ step state
-
-runWithOneInput :: InputState -> State
-runWithOneInput (Left output) = Left output
-runWithOneInput (Right (input, state@(counter, program, _))) = runUntilInput $ resetOutput nextState
+    3  -> Right state
+    _  -> runUntilInput $ step state
   where
-    (_, modes) = getOpcodeAndModes counter program
-    nextState = foldl' applyResult state $ saveOp counter modes program input
+    (opcode, _) = getOpcodeAndModes pointer program
 
-runProgram :: Program -> [Int] -> Output
-runProgram program input =
-  let counter = Counter 0
-      (opcode, _) = getOpcodeAndModes counter program
-      initialState = if opcode == 3 then Right (counter, program, []) else runUntilInput (counter, program, [])
-      results = initialState : map runWithOneInput inputs
-      inputs = zipWith addToEither input results
-  in join $ collectResults results
+continueFromInput :: Input -> Result
+continueFromInput (input, state@(pointer, program, _)) = runUntilInput $ resetOutput nextState
+  where
+    nextState = foldl' applyResult state $ saveInput pointer input program
+
+runProgram :: Program -> [Int] -> [Int]
+runProgram program input = takeUntil isLeft results >>= toOutput
+  where
+    initialState = runUntilInput (0, program, [])
+    results      = initialState : map continueFromInput inputs
+    inputs       = zip input $ rights results

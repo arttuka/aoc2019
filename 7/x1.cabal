@@ -18,6 +18,6 @@ executable x1
   main-is:             Main.hs
   other-modules:       Intcode
   -- other-extensions:
-  build-depends: base >=4.12 && <4.13, split == 0.2.3.3
+  build-depends: base >=4.12 && <4.13, split == 0.2.3.3, vector == 0.12.0.3
   -- hs-source-dirs:
   default-language:    Haskell2010
