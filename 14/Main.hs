@@ -57,12 +57,12 @@ chooseReaction amounts = find positiveAmount
     positiveAmount :: String -> Bool
     positiveAmount s = maybe False (>0) $ lookup s amounts
 
-calculateOre :: ReactionMap -> Int
-calculateOre reactions = step (singleton "FUEL" 1) ["FUEL"]
+calculateAmounts :: ReactionMap -> Int -> AmountMap -> Maybe AmountMap
+calculateAmounts reactions fuel amounts = if newOre < 1000000000000 then Just newAmounts else Nothing
   where
-    step :: AmountMap -> [String] -> Int
+    step :: AmountMap -> [String] -> AmountMap
     step amounts names = case chooseReaction amounts names of
-        Nothing   -> amounts ! "ORE"
+        Nothing   -> amounts
         Just name -> step newAmounts newNames
           where 
             reaction = reactions ! name
@@ -70,10 +70,24 @@ calculateOre reactions = step (singleton "FUEL" 1) ["FUEL"]
             (added, required) = calculateReaction amount reaction
             newAmounts = unionWith (+) required $ adjust (subtract added) name amounts
             newNames = updateNames name names $ keys required
+    newAmounts = step (adjust (+ fuel) "FUEL" amounts) ["FUEL"]
+    newOre     = newAmounts ! "ORE"
+
+calculateFuel :: ReactionMap -> Int
+calculateFuel reactions = step (singleton "FUEL" 0) 0 1 True
+  where
+    step :: AmountMap -> Int -> Int -> Bool -> Int
+    step amounts totalFuel addFuel increase = case newAmounts of
+        Just as                -> step as (totalFuel + addFuel) newAddFuel increase
+        Nothing | addFuel <= 1 -> totalFuel
+        Nothing                -> step amounts totalFuel (addFuel `div` 2) False
+      where
+        newAmounts = calculateAmounts reactions addFuel amounts
+        newAddFuel = if increase then 2 * addFuel else addFuel
 
 main :: IO ()
 main = do contents <- fmap lines getContents
           let reactions = map parseRow contents
               rmap      = makeReactionMap reactions
-              amount   = calculateOre rmap
+              amount    = calculateFuel rmap
           print amount
