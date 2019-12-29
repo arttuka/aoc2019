@@ -3,10 +3,10 @@ module Main where
 import Prelude hiding (lookup)
 import Control.Applicative
 import Control.Monad
-import Data.List (intercalate)
+import Data.List (find, intercalate)
 import Data.List.Split (splitOn)
 import Data.Map.Strict (Map, insert, keys, lookup, singleton)
-import qualified Data.Map.Strict as Map (notMember)
+import qualified Data.Map.Strict as Map (notMember, toList)
 import Data.Maybe (mapMaybe, maybe)
 import Data.Set (Set, member)
 import qualified Data.Set as Set (fromList)
@@ -14,7 +14,7 @@ import Data.Vector (fromList)
 import Intcode (Program, Result(..), runProgram, startProgram, inputValue, lastOutput)
 import qualified Intcode (State)
 import Input (Key(..), getKeys, setupStdin)
-import Route (Direction(..), Position, findRoute, move)
+import Route (Direction(..), Position, findRoute, floodFill, move)
 
 data Tile = Wall | Empty | Oxygen deriving (Eq, Enum)
 type Tiles = Map Position Tile
@@ -151,6 +151,8 @@ main = do setupStdin
 --              worlds          = scanl updateWorld initialWorld $ zip inputDirections outputs
               states          = runExplore program
               lastWorld       = _world $ last states
-              routeLength     = routeToOxygen lastWorld
+              tiles           = Map.toList $ _tiles lastWorld
+              oxygenPos       = fst <$> find (\(pos, tile) -> tile == Oxygen) tiles
+              fillTime        = floodFill (isPassable lastWorld) <$> oxygenPos
           print lastWorld
-          print routeLength
+          print fillTime

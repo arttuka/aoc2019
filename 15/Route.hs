@@ -4,7 +4,7 @@ import Prelude hiding (lookup)
 import Data.Map.Strict (Map, lookup)
 import qualified Data.Map.Strict as Map (empty, fromList, union)
 import Data.Set (Set, notMember, member)
-import qualified Data.Set as Set (fromList, singleton, union)
+import qualified Data.Set as Set (fromList, singleton, toList, union)
 import Queue (Queue, push, pushAll, peek, pop)
 import qualified Queue (singleton)
 
@@ -36,8 +36,8 @@ generateRoute pos parents = reverse $ step pos
         Nothing  -> []
         Just dir -> dir : step (moveBack pos dir)
 
-getNewMoves :: Position -> Set Position -> [(Position, Direction)]
-getNewMoves pos discovered = [ (p, d) | d <- [North, South, West, East],
+getNewMoves :: Set Position -> Position -> [(Position, Direction)]
+getNewMoves discovered pos = [ (p, d) | d <- [North, South, West, East],
                                         let p = move pos d,
                                         notMember p discovered
                              ]
@@ -51,9 +51,19 @@ findRoute from isPassable isGoal = step (Queue.singleton from) (Set.singleton fr
         Just pos | isGoal pos     -> Just $ generateRoute pos parents
         Just pos | isPassable pos -> step newQueue newDiscovered newParents
             where
-              newMoves = getNewMoves pos discovered
+              newMoves = getNewMoves discovered pos
               newPositions = map fst newMoves
               newDiscovered = Set.union discovered $ Set.fromList newPositions
               newQueue = pushAll newPositions (pop queue)
               newParents = Map.union parents $ Map.fromList newMoves
         _                         -> step (pop queue) discovered parents
+
+floodFill :: (Position -> Bool) -> Position -> Int
+floodFill isPassable from = step (-1) [from] (Set.singleton from)
+  where
+    step :: Int -> [Position] -> Set Position -> Int
+    step i [] _            = i
+    step i next discovered = step (succ i) (Set.toList newPositions) newDiscovered
+      where
+        newPositions = Set.fromList $ filter isPassable $ fst <$> (next >>= getNewMoves discovered)
+        newDiscovered = Set.union discovered newPositions
