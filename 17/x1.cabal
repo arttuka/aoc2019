@@ -16,7 +16,7 @@ build-type:          Simple
 
 executable x1
   main-is:             Main.hs
-  other-modules:       Intcode
+  other-modules:       Intcode, Util
   -- other-extensions:
   build-depends: base >=4.12 && <4.13, split == 0.2.3.3, vector == 0.12.0.3, containers == 0.6.0.1
   -- hs-source-dirs:
