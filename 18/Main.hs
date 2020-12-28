@@ -1,69 +1,25 @@
+{-# LANGUAGE TupleSections #-}
 module Main where
 
-import Control.Applicative
-import Control.Monad
-import Data.Char (chr, ord)
-import Data.List (find, intercalate, minimumBy, permutations, scanl)
-import Data.List.Split (splitOn)
-import Data.Map.Strict (Map, findWithDefault)
-import qualified Data.Map.Strict as Map (fromList)
-import Data.Maybe (catMaybes, mapMaybe)
+import Debug.Trace (trace)
+
+import Data.List (foldl1, minimum)
+import Data.Map.Strict (Map, (!), findWithDefault)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (catMaybes, mapMaybe, fromJust)
 import Data.Set (Set, insert, isSubsetOf, notMember)
-import qualified Data.Set as Set (empty, fromList)
-import Data.Vector (Vector, (!?), findIndex)
+import qualified Data.Set as Set
+import Data.Vector (Vector, findIndex)
 import qualified Data.Vector as Vector (fromList, toList)
-import Route (Position, Route(..), compareRoutes, findRouteBetween, findRouteVia, move)
+import Route 
 import Util
-
-data TileType = Wall | Empty | Entrance | Key Int | Door Int deriving Eq
-data Tile = Tile { _type     :: TileType
-                 , _position :: Position
-                 } deriving Eq
-type Tiles = Vector (Vector Tile)
-data World = World { _tiles  :: Tiles
-                   , _player :: Position
-                   }
-
-isKey :: Tile -> Bool
-isKey tile = case _type tile of
-    Key _ -> True
-    _     -> False
-
-instance Show Tile where
-    show Tile { _type = tile } = case tile of
-      Wall     -> "#"
-      Empty    -> "."
-      Entrance -> "@"
-      Key i    -> [chr (97 + i)]
-      Door i   -> [chr (65 + i)]
-
-instance Ord Tile where
-    compare t1 t2 = compare (_position t1) (_position t2)
-
-showWorld :: World -> String
-showWorld World{_tiles=tiles}
-    = intercalate "\n" $ showRow <$> Vector.toList tiles
-  where
-    showRow :: Vector Tile -> String
-    showRow = (show =<<) . Vector.toList
-
-instance Show World where
-    show = showWorld
-
-toTileType :: Char -> TileType
-toTileType '#'          = Wall
-toTileType '.'          = Empty
-toTileType '@'          = Entrance
-toTileType c
-    | between c 'a' 'z' = Key (ord c - 97)
-    | otherwise         = Door (ord c - 65)
 
 findEntrance :: Tiles -> Position
 findEntrance tiles = position
   where
     position = head $ catMaybes $ zipWith findFromRow [0..] (Vector.toList tiles)
     findFromRow :: Int -> Vector Tile -> Maybe Position
-    findFromRow y row = (\x -> (x, y)) <$> findIndex ((== Entrance) . _type) row
+    findFromRow y row = (,y) <$> findIndex ((== Entrance) . _type) row
 
 readWorld :: String -> World
 readWorld input = World { _tiles  = tiles
@@ -79,63 +35,60 @@ readWorld input = World { _tiles  = tiles
     readTile :: Int -> Int -> Char -> Tile
     readTile y x c = Tile { _type = toTileType c, _position = (x, y)}
 
-getTile :: Tiles -> Position -> Maybe Tile
-getTile tiles (x, y) = (tiles !? y) >>= (!? x)
-
-tileMatches :: (Tile -> Bool) -> Tiles -> Position -> Bool
-tileMatches pred tiles pos = maybe False pred $ getTile tiles pos
-
-isPassable :: Tiles -> Position -> Bool
-isPassable = tileMatches ((/= Wall) . _type)
-
-getKeyNumber :: Tile -> Maybe Int
-getKeyNumber tile = case _type tile of
-    Key i -> Just i
-    _     -> Nothing
-
-getDoorNumber :: Tile -> Maybe Int
-getDoorNumber tile = case _type tile of
-    Door i -> Just i
-    _      -> Nothing
-
-doorsOnRoute :: Tiles -> Route -> Set Int
-doorsOnRoute tiles Route { _from = from, _route = route } = Set.fromList doors
+getRoutesFromKey :: Tiles -> [Tile] -> Tile -> Map Position KeyRoute
+getRoutesFromKey tiles allKeys from = Map.fromList $ map (juxt (_to . _route) id) routes
   where
-    doors = mapMaybe ((getDoorNumber =<<) . getTile tiles) $ scanl move from route
+    routes = mapMaybe (getRouteBetweenKeys tiles from) $ filter (/= from) allKeys
 
-getRequiredKeys :: Tiles -> Position -> [Tile] -> Map Int (Set Int)
-getRequiredKeys tiles from keys = Map.fromList entries
-  where
-    entries = catMaybes $ juxtM getKeyNumber (fmap (doorsOnRoute tiles) . findRouteTo . _position) <$> keys
-    findRouteTo :: Position -> Maybe Route
-    findRouteTo = findRouteBetween (isPassable tiles) from
+getRoutesBetween :: Tiles -> Tile -> Tile -> [(Position, Position, KeyRoute)]
+getRoutesBetween tiles from to = case getRouteBetweenKeys tiles from to of
+  Nothing    -> []
+  Just route -> [(_position from, _position to, route), (_position to, _position from, reverseKeyRoute route)] 
 
-routeIsPossible :: Map Int (Set Int) -> [Tile] -> Bool
-routeIsPossible requiredKeys = step Set.empty
+getRoutesBetweenKeys :: Tiles -> [Tile] -> Map Position (Map Position KeyRoute)
+getRoutesBetweenKeys tiles allKeys = Map.fromList <$> groupBy fst3 rst3 allRoutes
   where
-    seenAll :: Int -> Set Int -> Bool
-    seenAll num = isSubsetOf (findWithDefault Set.empty num requiredKeys)
-    step :: Set Int -> [Tile] -> Bool
-    step _ []            = True
-    step seenKeys (t:ts) = case _type t of
-        Key i  | not (seenAll i seenKeys) -> False
-        Key i                             -> step (insert i seenKeys) ts
-        Door i | notMember i seenKeys     -> False
-        _                                 -> step seenKeys ts
+    allRoutes = [route | k1 <- allKeys
+                       , k2 <- allKeys
+                       , k1 < k2
+                       , route <- getRoutesBetween tiles k1 k2
+                       ]
+
+generatePossibleRoutes :: Map Position KeyRoute -> Map Position (Map Position KeyRoute) -> [Position] -> [Route]
+generatePossibleRoutes initialRoutes routesBetweenKeys allKeys = foldl1 joinRoutes . map _route <$> (start =<< pickEvery allKeys)
+  where
+    start :: (Position, [Position]) -> [[KeyRoute]]
+    start (p, ps)
+        | not (Set.null (_keys r)) = []
+        | Set.null (_doors r)      = (r:) <$> step keys p ps
+        | otherwise                = []
+      where
+        r    = initialRoutes ! p
+        keys = Set.singleton (_keyTo r)
+    step :: Set Int -> Position -> [Position] -> [[KeyRoute]]
+    step _ _ [] = [[]]
+    step keys from ps = pickEvery ps >>= innerStep keys from
+    innerStep :: Set Int -> Position -> (Position, [Position]) -> [[KeyRoute]]
+    innerStep keys from (to, ps)
+        | not (_keys r `isSubsetOf` keys) = [] 
+        | _doors r `isSubsetOf` keys      = (r:) <$> step nextKeys to ps
+        | otherwise                       = []
+      where
+        r        = lookup2 routesBetweenKeys from to
+        nextKeys = insert (_keyTo r) keys 
 
 collectAllKeys :: World -> Route
-collectAllKeys world @ World { _tiles = tiles, _player = from } = bestRoute
+collectAllKeys world @ World { _tiles = tiles, _player = from } = trace ("Number of routes " ++ show (length possibleRoutes)) $ minimum possibleRoutes
   where
-    allTiles        = Vector.toList tiles >>= Vector.toList
-    allKeys         = filter isKey allTiles
-    requiredKeys    = getRequiredKeys tiles from allKeys
-    candidateRoutes = (from:) . fmap _position <$> filter (routeIsPossible requiredKeys) (permutations allKeys)
-    routes          = catMaybes $ findRouteVia (isPassable tiles) <$> candidateRoutes
-    bestRoute       = minimumBy compareRoutes routes
+    allTiles          = Vector.toList tiles >>= Vector.toList
+    allKeys           = filter isKey allTiles
+    initialRoutes     = getRoutesFromKey tiles allKeys $ fromJust $ getTile tiles from
+    routesBetweenKeys = getRoutesBetweenKeys tiles allKeys
+    possibleRoutes    = generatePossibleRoutes initialRoutes routesBetweenKeys $ map _position allKeys
 
 main :: IO ()
 main = do contents <- getContents
           let world = readWorld contents
               route = collectAllKeys world
-          --print world
+          print world
           print route
