@@ -1,7 +1,8 @@
 (ns aoc-clj.util
   (:require [clojure.core.async :refer [<! >! chan close! go mult tap]]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str])
+  (:import (clojure.lang PersistentQueue)))
 
 (defn read-program [input]
   (-> (io/resource input)
@@ -35,3 +36,17 @@
             (recur next-acc (<! c)))
           (close! cout))))
     cout))
+
+(defn bbox [positions]
+  (let [[xs ys] (apply zip positions)
+        min-x (reduce min xs)
+        min-y (reduce min ys)
+        max-x (reduce max xs)
+        max-y (reduce max ys)]
+    [min-x min-y max-x max-y]))
+
+(defn abs [x]
+  (if (neg? x) (- x) x))
+
+(defn queue [& xs]
+  (into PersistentQueue/EMPTY xs))
