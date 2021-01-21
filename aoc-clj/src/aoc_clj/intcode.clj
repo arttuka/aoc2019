@@ -7,19 +7,22 @@
     []
     (let [mode (case (rem v 10)
                  0 ::position
-                 1 ::immediate)]
+                 1 ::immediate
+                 2 ::relative)]
       (cons mode (get-modes (quot v 10) (dec n))))))
 
-(defn get-params [program pointer modes]
+(defn get-params [{:keys [program pointer base]} modes]
   (for [[i mode] (indexed modes)
-        :let [v (get program (+ pointer 1 i))]]
-    (case mode
-      ::position {:val (get program v)
-                  :pos v}
-      ::immediate {:val v})))
+        :let [v (get program (+ pointer 1 i) 0)
+              pos (case mode
+                    ::position v
+                    ::immediate nil
+                    ::relative (+ v base))]]
+    {:val (if pos (get program pos 0) v)
+     :pos pos}))
 
-(defn get-instruction [program pointer]
-  (let [opcode (get program pointer)
+(defn get-instruction [{:keys [program pointer] :as state}]
+  (let [opcode (get program pointer 0)
         [op n] (case (rem opcode 100)
                  1 [::add 3]
                  2 [::mult 3]
@@ -29,14 +32,21 @@
                  6 [::jz 2]
                  7 [::lt 3]
                  8 [::eq 3]
+                 9 [::base 1]
                  99 [::exit 0])
         modes (get-modes (quot opcode 100) n)]
     {:op     op
-     :params (get-params program pointer modes)}))
+     :params (get-params state modes)}))
 
-(defn step [{:keys [program pointer cin cout] :as state}]
+(defn update-program [program pos v]
+  (let [new-program (if (<= (count program) pos)
+                      (vec (concat program (repeat (- pos (count program)) 0)))
+                      program)]
+    (assoc new-program pos v)))
+
+(defn step [{:keys [program pointer cin cout base] :as state}]
   (go
-    (let [{:keys [op params]} (get-instruction program pointer)
+    (let [{:keys [op params]} (get-instruction state)
           new-pointer (case op
                         ::jnz (let [[v pos] params]
                                 (if-not (zero? (:val v))
@@ -58,13 +68,19 @@
                                          ::eq (let [[p1 p2 out] params]
                                                 [(:pos out) (if (= (:val p1) (:val p2)) 1 0)])
                                          nil)]
-                        (assoc program pos v)
-                        program)]
+                        (update-program program pos v)
+                        program)
+          new-base (+ base (if (= ::base op)
+                             (:val (first params))
+                             0))]
       (when (= ::output op)
         (>! cout (:val (first params))))
       (if (= ::exit op)
         ::exit
-        (assoc state :pointer new-pointer :program new-program)))))
+        (assoc state
+          :pointer new-pointer
+          :program new-program
+          :base new-base)))))
 
 (defn ^:private run-program [state]
   (go-loop [state state]
@@ -81,6 +97,7 @@
     (go
       (<! (run-program {:program program
                         :pointer 0
+                        :base    0
                         :cin     cin
                         :cout    cout}))
       (close! cout))
