@@ -8,7 +8,7 @@
 
 (defn run-with-input [program [i j]]
   (let [program (assoc program 1 i, 2 j)
-        end-state (intcode/run program)]
+        end-state (intcode/run program nil nil)]
     (get-in end-state [:program 0])))
 
 (defn run []

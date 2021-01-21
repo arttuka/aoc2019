@@ -7,3 +7,6 @@
       (slurp)
       (str/split #",")
       (->> (mapv #(Long/parseLong %)))))
+
+(defn indexed [coll]
+  (map-indexed vector coll))
