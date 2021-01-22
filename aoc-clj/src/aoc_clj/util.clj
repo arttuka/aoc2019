@@ -1,8 +1,9 @@
 (ns aoc-clj.util
-  (:require [clojure.core.async :refer [<! >! chan close! go mult tap]]
+  (:require [clojure.core.async :refer [<! >! chan close! go go-loop mult tap]]
             [clojure.java.io :as io]
             [clojure.string :as str])
-  (:import (clojure.lang PersistentQueue)))
+  (:import (clojure.lang PersistentQueue)
+           (clojure.core.async.impl.channels ManyToManyChannel)))
 
 (defn read-program [input]
   (-> (io/resource input)
@@ -15,6 +16,9 @@
 
 (defn zip [& colls]
   (apply map vector colls))
+
+(defn transpose [coll]
+  (apply map vector coll))
 
 (defn split-chan [c]
   (let [c1 (chan 100)
@@ -80,3 +84,31 @@
   (when (seq coll)
     (let [[start [_ & end]] (split-with (complement pred) coll)]
       (cons start (lazy-seq (split-on pred end))))))
+
+(defn process-chan
+  ([c f]
+   (process-chan c f (fn [])))
+  ([c f end-f]
+   (go-loop []
+     (if-some [x (<! c)]
+       (let [ret (f x)]
+         (when (instance? ManyToManyChannel ret)
+           (<! ret))
+         (recur))
+       (end-f)))))
+
+(defn binary-search [f left right]
+  (go-loop [left left
+            right right]
+    (when (<= left right)
+      (let [m (quot (+ left right) 2)
+            r (<! (f m))]
+        (cond
+          (pos? r) (recur left (dec m))
+          (neg? r) (recur (inc m) right)
+          (zero? r) m)))))
+
+(defn and'
+  ([] true)
+  ([x] x)
+  ([x y] (and x y)))
