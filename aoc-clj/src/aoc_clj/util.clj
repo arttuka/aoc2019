@@ -50,3 +50,33 @@
 
 (defn queue [& xs]
   (into PersistentQueue/EMPTY xs))
+
+(defn find-where [pred coll]
+  (first (filter pred coll)))
+
+(defn unfold [f init]
+  (when-let [[x acc] (f init)]
+    (cons x (lazy-seq (unfold f acc)))))
+
+(defn prefix? [prefix coll]
+  (every? (partial apply =) (zip prefix (concat coll (repeat (Object.))))))
+
+(defn count-pattern [pattern coll]
+  (let [length (count pattern)]
+    (loop [n 0
+           coll coll]
+      (cond
+        (empty? coll) n
+        (prefix? pattern coll) (recur (inc n) (drop length coll))
+        :else (recur n (rest coll))))))
+
+(defn replace-pattern [pattern replacement coll]
+  (cond
+    (empty? coll) nil
+    (prefix? pattern coll) (cons replacement (replace-pattern pattern replacement (drop (count pattern) coll)))
+    :else (cons (first coll) (replace-pattern pattern replacement (rest coll)))))
+
+(defn split-on [pred coll]
+  (when (seq coll)
+    (let [[start [_ & end]] (split-with (complement pred) coll)]
+      (cons start (lazy-seq (split-on pred end))))))
