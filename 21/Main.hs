@@ -18,6 +18,12 @@ scProgram = [ NOT A T
             , NOT C T
             , OR  T J
             , AND D J
+            , OR  J T
+            , AND I T
+            , OR  F T
+            , AND E T
+            , OR  H T
+            , AND T J
             ]
 
 toInput :: [Instruction] -> [Int]
