@@ -1,5 +1,5 @@
 (ns aoc-clj.intcode
-  (:require [clojure.core.async :refer [<! <!! >! chan close! go go-loop]]
+  (:require [clojure.core.async :refer [<! <!! >! alts! chan close! go go-loop]]
             [aoc-clj.util :refer [indexed]]))
 
 (defn get-modes [v n]
@@ -44,7 +44,7 @@
                       program)]
     (assoc new-program pos v)))
 
-(defn step [{:keys [program pointer cin cout base] :as state}]
+(defn step [{:keys [program pointer cin cout base mode] :as state}]
   (go
     (let [{:keys [op params]} (get-instruction state)
           new-pointer (case op
@@ -62,7 +62,9 @@
                                                  [(:pos out) (+ (:val p1) (:val p2))])
                                          ::mult (let [[p1 p2 out] params]
                                                   [(:pos out) (* (:val p1) (:val p2))])
-                                         ::input [(:pos (first params)) (<! cin)]
+                                         ::input [(:pos (first params)) (if (= :nic mode)
+                                                                          (first (alts! [cin] :default -1))
+                                                                          (<! cin))]
                                          ::lt (let [[p1 p2 out] params]
                                                 [(:pos out) (if (< (:val p1) (:val p2)) 1 0)])
                                          ::eq (let [[p1 p2 out] params]
@@ -92,13 +94,14 @@
         ::exit state
         (recur new-state)))))
 
-(defn run [program cin]
+(defn run [program cin & [mode]]
   (let [cout (chan 100)]
     (go
       (<! (run-program {:program program
                         :pointer 0
                         :base    0
                         :cin     cin
-                        :cout    cout}))
+                        :cout    cout
+                        :mode    mode}))
       (close! cout))
     cout))
