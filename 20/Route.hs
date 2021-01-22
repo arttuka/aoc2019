@@ -12,26 +12,27 @@ import qualified Queue (singleton)
 
 data Direction = North | South | West | East deriving (Enum, Show)
 type Position = (Int, Int)
-type Move = Position -> Direction -> Maybe Position
+type Position3D = (Int, Int, Int)
+type Move = Position3D -> Direction -> Maybe Position3D
 
-generateRoute :: Position -> Map Position Position -> [Position]
+generateRoute :: Position3D -> Map Position3D Position3D -> [Position3D]
 generateRoute pos parents = reverse $ step pos
   where
-    step :: Position -> [Position]
+    step :: Position3D -> [Position3D]
     step pos = case lookup pos parents of
         Nothing  -> []
         Just newPos -> pos : step newPos
 
-getNewMoves :: Set Position -> Move -> Position -> [Position]
+getNewMoves :: Set Position3D -> Move -> Position3D -> [Position3D]
 getNewMoves discovered move pos = [ p | d <- [North, South, West, East],
                                         p <- maybeToList $ move pos d,
                                         notMember p discovered
                                   ]
   
-findRoute :: Position -> Position -> Move -> Maybe [Position]
+findRoute :: Position3D -> Position3D -> Move -> Maybe [Position3D]
 findRoute from to move = step (Queue.singleton from) (Set.singleton from) Map.empty
   where
-    step :: Queue Position -> Set Position -> Map Position Position -> Maybe [Position]
+    step :: Queue Position3D -> Set Position3D -> Map Position3D Position3D -> Maybe [Position3D]
     step queue discovered parents = case peek queue of
         Nothing              -> Nothing
         Just pos | pos == to -> Just $ generateRoute pos parents

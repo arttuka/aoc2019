@@ -9,9 +9,6 @@ import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
 import Data.Vector (Vector, (!), (!?), (//), fromList, toList)
 
-type Position = (Int, Int)
-data Direction = Up | Down | Left | Right deriving (Enum, Eq, Show)
-
 getLines :: IO [String]
 getLines = fmap lines getContents
 
@@ -42,13 +39,13 @@ to2DList = (toList <$>) . toList
 (!!?) :: Vector (Vector a) -> (Int, Int) -> Maybe a
 (!!?) v (x, y) = (v !? y) >>= (!? x)
 
-(///) :: forall a. Vector (Vector a) -> [(Position, a)] -> Vector (Vector a)
+(///) :: forall a. Vector (Vector a) -> [((Int, Int), a)] -> Vector (Vector a)
 (///) v vals = v // (toUpdate <$> M.toList gVals)
   where
     gVals = groupBy toKey toSubval vals
-    toKey :: (Position, a) -> Int
+    toKey :: ((Int, Int), a) -> Int
     toKey ((_, y), _) = y
-    toSubval :: (Position, a) -> (Int, a)
+    toSubval :: ((Int, Int), a) -> (Int, a)
     toSubval ((x, _), a) = (x, a)
     toUpdate :: (Int, [(Int, a)]) -> (Int, Vector a)
     toUpdate (y, vs) = (y, (v ! y) // vs)
