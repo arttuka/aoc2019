@@ -1,10 +1,10 @@
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 module Main where
 
-import Control.Monad ((<=<))
+import Control.Monad ((<=<), liftM2)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Vector (Vector, elemIndex)
@@ -12,40 +12,35 @@ import qualified Data.Vector as Vector
 import Route
 import Util
 
-findEntrance :: Tiles -> Position
-findEntrance tiles = position
+readTiles :: String -> ([Position], Tiles)
+readTiles input = (entrances, tiles)
   where
-    position = head $ zipIndexedMaybe findFromRow (Vector.toList tiles)
-    findFromRow :: Int -> Vector Tile -> Maybe Position
-    findFromRow y row = (,y) <$> elemIndex Entrance row
+    tiles     = from2DList $ fmap readTile <$> lines input
+    entrances = findTiles (== Entrance) tiles
 
-readTiles :: String -> (Position, Tiles)
-readTiles input = (entrance, tiles)
+findTiles :: (Tile -> Bool) -> Tiles -> [Position]
+findTiles pred = catMaybes . mapcatIndexed (mapIndexed . findTile) . to2DList
   where
-    tiles    = from2DList $ fmap readTile <$> lines input
-    entrance = findEntrance tiles
+    findTile :: Int -> Int -> Tile -> Maybe Position
+    findTile y x tile = if pred tile then Just (x, y) else Nothing
 
-getKeyPositions :: Tiles -> [Position]
-getKeyPositions = uncurry getFromRow <=< (indexed . to2DList)
+findKeys :: Tiles -> [Position]
+findKeys = findTiles (\case (Key _) -> True; _ -> False)
+
+makeQuadrantRouteIndex :: Tiles -> Position -> [Position] -> RouteIndex
+makeQuadrantRouteIndex tiles entrance keys = makeRouteIndex $ findAllRoutes tiles intersections entrance
   where
-    getFromRow :: Int -> [Tile] -> [Position]
-    getFromRow = zipIndexedMaybe . getFromTile
-    getFromTile :: Int -> Int -> Tile -> Maybe Position
-    getFromTile y x (Key _) = Just (x, y)
-    getFromTile _ _ _       = Nothing
+    routePositions = Set.fromList $ fromMaybe [] . findSimpleRoute tiles =<< pairs (entrance : keys)
+    intersections = findIntersections tiles routePositions
 
 main :: IO ()
 main = do contents <- getContents
-          let (entrance, tiles) = readTiles contents
-              keys              = getKeyPositions tiles
-              keyNums           = Set.fromList $ mapMaybe (getKey tiles) keys
-              keypairs          = pairs (entrance:keys)
-              routes            = findSimpleRoute tiles <$> keypairs
-              routePositions    = Set.fromList $ fromMaybe [] . findSimpleRoute tiles =<< pairs (entrance : keys)
-              intersections     = entrance `Set.insert` findIntersections tiles routePositions
-              allRoutes         = findAllRoutes tiles intersections entrance
-              routeIndex        = makeRouteIndex allRoutes
-              bestRoute         = findBestRoute routeIndex keyNums entrance
+          let (entrances, tiles) = readTiles contents
+              width              = Vector.length (Vector.head tiles)
+              height             = Vector.length tiles
+              keys               = ($ findKeys tiles) . filter . (. toQuadrant width height) . (==) <$> [0..3]
+              keyNums            = Set.fromList . mapMaybe (getKey tiles) <$> keys
+              routeIndexes       = zipWith (makeQuadrantRouteIndex tiles) entrances keys
+              bestRoute          = findBestRoute routeIndexes keyNums entrances
           putStrLn $ showTiles tiles
-          print (toSimpleRoute bestRoute)
-          print (_prLength bestRoute)
+          print $ sum $ map _length bestRoute

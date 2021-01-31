@@ -21,8 +21,8 @@ push :: a -> Queue a -> Queue a
 push x Empty            = singleton x
 push x (Value len ins outs) = Value (len + 1) (x:ins) outs
 
-pushAll :: Foldable t => t a -> Queue a -> Queue a
-pushAll xs q = foldl' (flip push) q xs
+pushAll :: Foldable t => Queue a -> t a -> Queue a
+pushAll = foldl' (flip push)
 
 peek :: Queue a -> Maybe a
 peek Empty              = Nothing

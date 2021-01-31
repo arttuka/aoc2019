@@ -5,18 +5,19 @@ module Route where
 import Debug.Trace
 
 import Prelude hiding (lookup)
-import Control.Monad ((<=<), liftM2)
+import Control.Applicative ((<|>))
+import Control.Monad ((<=<), liftM2, liftM3)
 import Data.Char (chr, ord)
-import Data.List (intercalate, minimumBy, sort)
+import Data.List (find, intercalate, minimumBy, null, sort)
 import Data.Map.Strict (Map, lookup)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Ord (comparing)
 import Data.Set (Set, member, notMember)
 import qualified Data.Set as Set
 import Data.Tuple (swap)
 import Data.Vector (Vector, (!?))
-import Queue (Queue, pushAll, peek, pop)
+import Queue (Queue, push, pushAll, peek, pop)
 import qualified Queue
 import Util
 
@@ -31,29 +32,21 @@ instance Show Tile where
 type Tiles = Vector (Vector Tile)
 type Position = (Int, Int)
 type SimpleRoute = [Position]
+type RouteIndex = Map Position [Route]
 data Route = Route { _from    :: Position
                    , _to      :: Position
                    , _keyFrom :: Maybe Int
                    , _keyTo   :: Maybe Int
-                   , _doors   :: Set Int
+                   , _doors   :: [Int]
                    , _route   :: [Position]
                    , _length  :: Int
                    } deriving (Eq, Show)
-
-instance Ord Route where
-  compare r1 r2 = compare (_length r1) (_length r2)
-
-type RouteIndex = Map Position [Route]
-
 data PartialRoute = PartialRoute { _prFrom   :: Position
                                  , _prTo     :: Position
                                  , _prKeys   :: Set Int
                                  , _prRoutes :: [Route]
                                  , _prLength :: Int
                                  } deriving (Eq, Show)
-
-instance Ord PartialRoute where
-  compare r1 r2 = compare (_prLength r1) (_prLength r2)
 
 readTile :: Char -> Tile
 readTile '#'            = Wall
@@ -64,13 +57,10 @@ readTile c
     | otherwise         = Door (ord c - 65)
 
 showTiles :: Tiles -> String
-showTiles tiles = intercalate "\n" $ (show =<<) <$> to2DList tiles
+showTiles = intercalate "\n" . ((show =<<) <$>) . to2DList
 
 isPassable :: Tiles -> Position -> Bool
-isPassable tiles pos = case getTile tiles pos of
-  Nothing   -> False
-  Just Wall -> False
-  _         -> True
+isPassable = (maybe False (/= Wall) .) . getTile
 
 getTile :: Tiles -> Position -> Maybe Tile
 getTile tiles = (tiles !!?) . swap
@@ -96,18 +86,15 @@ reverseRoute r = Route { _from    = _to r
                        }
 
 addToPartial :: Route -> PartialRoute -> PartialRoute
-addToPartial r pr = PartialRoute { _prFrom = _prFrom pr
-                                 , _prTo   = _to r
-                                 , _prKeys = foldMaybe Set.insert (_keyTo r) (_prKeys pr)
+addToPartial r pr = PartialRoute { _prFrom   = _prFrom pr
+                                 , _prTo     = _to r
+                                 , _prKeys   = insertMaybe (_keyTo r) (_prKeys pr)
                                  , _prLength = _length r + _prLength pr
                                  , _prRoutes = _prRoutes pr ++ [r]
                                  }
 
-toSimpleRoute :: PartialRoute -> SimpleRoute
-toSimpleRoute = _route <=< _prRoutes
-
 makeRouteIndex :: [Route] -> RouteIndex
-makeRouteIndex routes = Map.fromListWith (++) $ map (juxt _from pure) routes
+makeRouteIndex = Map.fromListWith (++) . map (juxt _from pure)
 
 adjacentPositions :: Position -> [Position]
 adjacentPositions pos = addT2 pos <$> [(1, 0), (-1, 0), (0, 1), (0, -1)]
@@ -123,7 +110,7 @@ generateRoute tiles parents to = Route { _from    = from
                                        , _to      = to
                                        , _keyFrom = getKey tiles from
                                        , _keyTo   = getKey tiles to
-                                       , _doors   = Set.fromList $ mapMaybe (getDoor tiles) simpleRoute
+                                       , _doors   = mapMaybe (getDoor tiles) simpleRoute
                                        , _route   = simpleRoute
                                        , _length  = length simpleRoute
                                        }
@@ -138,9 +125,9 @@ expandPosition tiles goalVal recurFn queue discovered parents isGoal pos
     | otherwise  = recurFn nextQueue nextDiscovered nextParents
   where
     nextPositions  = getNextPositions tiles discovered pos
-    nextDiscovered = Set.union discovered $ Set.fromList nextPositions
-    nextQueue      = pushAll nextPositions (pop queue)
-    nextParents    = Map.union parents $ Map.fromList $ fmap (,pos) nextPositions  
+    nextDiscovered = insertAllSet discovered nextPositions
+    nextQueue      = pushAll (pop queue) nextPositions
+    nextParents    = insertAllMap parents $ fmap (,pos) nextPositions
 
 findSimpleRoute :: Tiles -> (Position, Position) -> Maybe SimpleRoute
 findSimpleRoute tiles (from, to) = searchNextPos (Queue.singleton from) (Set.singleton from) Map.empty
@@ -151,10 +138,14 @@ findSimpleRoute tiles (from, to) = searchNextPos (Queue.singleton from) (Set.sin
         goalVal = Just $ generateSimpleRoute parents to
 
 findIntersections :: Tiles -> Set Position -> Set Position
-findIntersections tiles routePositions = Set.filter (orPred keyPred intersectionPred) routePositions
+findIntersections tiles routePositions = Set.filter (orPred tilePred intersectionPred) routePositions
   where
-    keyPred :: Position -> Bool
-    keyPred = isJust . getKey tiles
+    isIntersection :: Tile -> Bool
+    isIntersection (Key _)  = True
+    isIntersection Entrance = True
+    isIntersection _        = False
+    tilePred :: Position -> Bool
+    tilePred = maybe False isIntersection . getTile tiles
     intersectionPred :: Position -> Bool
     intersectionPred = (3 <=) . length . filter (`member` routePositions) . adjacentPositions
 
@@ -174,39 +165,52 @@ findAllRoutes tiles intersections from = allRoutes ++ map reverseRoute allRoutes
                     in expandPosition tiles goalVal (searchNextPos goals isGoal) queue discovered parents isGoal pos
         Nothing  -> (discovered, generateRoute tiles parents <$> goals)
 
-findBestRoute :: RouteIndex -> Set Int -> Position -> PartialRoute
-findBestRoute routeIndex keys from = minimumBy (comparing _prLength) possibleRoutes
+
+alterDiscovered :: Set Int -> Int -> Maybe (Map (Set Int) Int) -> Maybe (Map (Set Int) Int)
+alterDiscovered keys length = return . maybe (Map.singleton keys length) (Map.insert keys length)
+
+findPossibleRoutes :: RouteIndex -> Set Int -> Position -> [[Route]]
+findPossibleRoutes routeIndex keys from = _prRoutes <$> searchNextPos (getNextQueue Queue.empty emptyPartial from) (Map.singleton from (Map.singleton Set.empty 0))
   where
-    possibleRoutes = searchNextPos (getNextQueue Queue.empty emptyPartial from) (Map.singleton from (Map.singleton Set.empty 0)) 
     emptyPartial = PartialRoute { _prFrom   = from
                                 , _prTo     = from
                                 , _prKeys   = Set.empty
                                 , _prLength = 0
                                 , _prRoutes = []}
     getNextQueue :: Queue (PartialRoute, Route) -> PartialRoute -> Position -> Queue (PartialRoute, Route)
-    getNextQueue queue pr pos = pushAll (map (pr,) (routeIndex Map.! pos)) (pop queue)
+    getNextQueue queue pr pos = pushAll (pop queue) $ map (pr,) (routeIndex Map.! pos)
     isDiscovered :: Map Position (Map (Set Int) Int) -> Set Int -> Int -> Position -> Bool
-    isDiscovered discovered keys length pos = case discovered Map.!? pos of
-      Nothing -> False
-      Just m  -> any (length >=) [ l | (ks, l) <- Map.toList m
-                                     , keys `Set.isSubsetOf` ks
-                                     ]
+    isDiscovered discovered keys length = maybe False (any (\(ks, l) -> length >= l && keys `Set.isSubsetOf` ks) . Map.toList) . (discovered Map.!?)
     searchNextPos :: Queue (PartialRoute, Route) -> Map Position (Map (Set Int) Int) -> [PartialRoute]
     searchNextPos queue discovered = maybe [] expandRoute (peek queue)
       where
-        alterDiscovered :: Set Int -> Int -> Maybe (Map (Set Int) Int) -> Maybe (Map (Set Int) Int)
-        alterDiscovered keys length Nothing  = Just $ Map.singleton keys length
-        alterDiscovered keys length (Just m) = Just $ Map.insert keys length m
         expandRoute :: (PartialRoute, Route) -> [PartialRoute]
-        expandRoute (pr, r)
-            | not (_doors r `Set.isSubsetOf` _prKeys pr)      = searchNextPos (pop queue) discovered
-            | isDiscovered discovered nextKeys nextLength pos = searchNextPos (pop queue) discovered
-            | keys == nextKeys                                = nextRoute : searchNextPos (pop queue) nextDiscovered
-            | otherwise                                       = searchNextPos (getNextQueue queue nextRoute pos) nextDiscovered
+        expandRoute (pr@PartialRoute{ _prKeys = foundKeys }, r@Route{ _to = pos })
+            | not ((Set.fromList (_doors r) `Set.intersection` keys) `Set.isSubsetOf` foundKeys) || isDiscovered discovered nextKeys nextLength pos
+                               = searchNextPos (pop queue) discovered
+            | keys == nextKeys = nextRoute : searchNextPos (pop queue) nextDiscovered
+            | otherwise        = searchNextPos (getNextQueue queue nextRoute pos) nextDiscovered
           where
-            prevDiscovered = lookup2 discovered pos nextKeys
-            pos = _to r
-            nextRoute = addToPartial r pr
-            nextKeys = _prKeys nextRoute
-            nextLength = _prLength nextRoute
+            nextRoute@PartialRoute{ _prKeys = nextKeys, _prLength = nextLength } = addToPartial r pr
             nextDiscovered = Map.alter (alterDiscovered nextKeys nextLength) pos discovered
+
+findBestRoute :: [RouteIndex] -> [Set Int] -> [Position] -> [Route]
+findBestRoute routeIndexes allKeys from = minimumBy (comparing (sum . fmap _length)) interleavedRoutes
+  where
+    interleavedRoutes = mapMaybe (interleaveRoutes (Set.singleton 0) Set.empty 0) $ cartesian possibleRoutes
+    possibleRoutes = zipWith3 findPossibleRoutes routeIndexes allKeys from
+    keyToQ = mapBy snd fst $ mapcatIndexed (zip . repeat) (Set.toList <$> allKeys)
+    interleaveRoutes :: Set Int -> Set Int -> Int -> [[Route]] -> Maybe [Route]
+    interleaveRoutes _ _ _ [[], [], [], []] = Just []
+    interleaveRoutes tried keys q routes = (xs ++) <$> (flip (interleaveRoutes nextTried nextKeys) (replaceNth q ys routes) =<< nextQ)
+      where
+        (nextKeys, xs, ys) = spanPossible keys (routes !! q)
+        nextTried = if null xs then q `Set.insert` tried else Set.singleton q
+        nextQ = (safeHead ys >>= getDoorQ) <|> find (`notMember` tried) [0..3]
+        getDoorQ :: Route -> Maybe Int
+        getDoorQ = find (`notMember` tried) . fmap (keyToQ Map.!) . filter (`notMember` nextKeys) . _doors
+    spanPossible :: Set Int -> [Route] -> (Set Int, [Route], [Route])
+    spanPossible keys [] = (keys, [], [])
+    spanPossible keys xs@(x:xs')
+      | Set.fromList (_doors x) `Set.isSubsetOf` keys = let (ks, ys, zs) = spanPossible (insertMaybe (_keyTo x) keys) xs' in (ks, x:ys, zs)
+      | otherwise                                     = (keys, [], xs)

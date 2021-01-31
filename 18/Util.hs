@@ -6,10 +6,12 @@ import Control.Applicative
 import Control.Monad
 import Data.List (foldl')
 import Data.Map.Strict (Map, (!?), assocs, fromList, fromListWith, keys)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, maybe)
 import Data.Set (Set, delete)
+import qualified Data.Set as Set
 import Data.Vector (Vector)
-import qualified Data.Vector as V ((!), (!?), fromList, toList)
+import qualified Data.Vector as V
 
 between :: Ord a => a -> a -> a -> Bool
 between from to x = x >= from && x <= to
@@ -93,20 +95,56 @@ orPred :: (a -> Bool) -> (a -> Bool) -> (a -> Bool)
 orPred = liftM2 (||)
 
 indexed :: [a] -> [(Int, a)]
-indexed = zipIndexed (,)
+indexed = mapIndexed (,)
 
-zipIndexed :: (Int -> a -> b) -> [a] -> [b]
-zipIndexed f = zipWith f [0..]
+mapIndexed :: (Int -> a -> b) -> [a] -> [b]
+mapIndexed f = zipWith f [0..]
 
-zipIndexedMaybe :: (Int -> a -> Maybe b) -> [a] -> [b]
-zipIndexedMaybe = (catMaybes .) . zipIndexed
+mapcatIndexed :: (Int -> a -> [b]) -> [a] -> [b]
+mapcatIndexed = (<=< indexed) . uncurry
+
+mapIndexedMaybe :: (Int -> a -> Maybe b) -> [a] -> [b]
+mapIndexedMaybe = (catMaybes .) . mapIndexed
 
 pairs :: Ord a => [a] -> [(a, a)]
-pairs xs = [(a, b) | a <- xs
-                   , b <- xs
-                   , a < b
-                   ]
+pairs xs = filter (uncurry (<)) $ (,) <$> xs <*> xs
 
 foldMaybe :: (a -> b -> b) -> Maybe a -> b -> b
 foldMaybe _ Nothing b = b
 foldMaybe f (Just a) b = f a b
+
+insertMaybe :: Ord a => Maybe a -> Set a -> Set a
+insertMaybe = foldMaybe Set.insert
+
+maybeToSet :: Maybe a -> Set a
+maybeToSet Nothing  = Set.empty
+maybeToSet (Just a) = Set.singleton a
+
+replaceNth :: Int -> a -> [a] -> [a]
+replaceNth _ _ [] = []
+replaceNth n v (x:xs)
+  | n == 0        = v:xs
+  | otherwise     = x:replaceNth (n - 1) v xs
+
+safeHead :: [a] -> Maybe a
+safeHead []    = Nothing
+safeHead (x:_) = Just x
+
+cartesian :: [[a]] -> [[a]]
+cartesian = foldr (\ xs -> (<*>) ((:) <$> xs)) [[]]
+
+toQuadrant :: Int -> Int -> (Int, Int) -> Int
+toQuadrant w h (x, y)
+    | x <  mx && y <  my = 0
+    | x >= mx && y <  my = 1
+    | x <  mx && y >= my = 2
+    | otherwise          = 3
+  where
+    mx = w `div` 2
+    my = h `div` 2
+
+insertAllSet :: (Ord a, Foldable t) => Set a -> t a -> Set a
+insertAllSet = foldl' (flip Set.insert)
+
+insertAllMap :: (Ord k, Foldable t) => Map k a -> t (k, a) -> Map k a
+insertAllMap = foldl' (flip (uncurry Map.insert))
