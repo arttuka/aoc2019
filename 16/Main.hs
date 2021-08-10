@@ -1,39 +1,33 @@
 module Main where
 
-import Control.Applicative
-import Control.Monad
 import Data.Char (digitToInt)
+import Data.List (scanl, scanl', scanl1, scanr, scanr1)
 import Debug.Trace
 
 applyN :: Int -> (a -> a) -> a -> a
 applyN n f x = iterate f x !! n
 
-getPattern :: Int -> [Int]
-getPattern n = tail . cycle $ replicate (succ n) =<< [0, 1, 0, -1]
-
-onesDigit :: Int -> Int
-onesDigit i = (rem . abs) i 10
-
-fftPhase :: [Int] -> [Int]
-fftPhase input = trace "fftPhase" $ map calculateDigit [0 .. pred n]
-  where
-    n                = length input
-    calculateDigit i = onesDigit $ sum $ zipWith (*) input $ getPattern i
-
 readInputDigits :: String -> [Int]
 readInputDigits = map digitToInt
 
 cycle10k :: [a] -> [a]
-cycle10k lst = take (10000 * n) $ cycle lst
-  where
-    n = length lst
+cycle10k = concat . replicate 10000
 
 mergeNum :: [Int] -> Int
 mergeNum i = read $ show =<< i
 
+add :: Int -> Int -> Int
+add x y = (x + y) `mod` 10
+
+fftPhase :: [Int] -> [Int]
+fftPhase (x:xs) = scanl' add x xs
+
+applyFFT :: Int -> [Int] -> [Int]
+applyFFT n = reverse . applyN n fftPhase . reverse
+
 main :: IO ()
-main = do contents <- getContents
-          let digits = cycle10k $ readInputDigits contents
-              offset = mergeNum $ take 7 digits
-              result = applyN 2 fftPhase digits
-          print $ show =<< take 8 (drop offset result)
+main = do input <- readInputDigits <$> getContents
+          let digits = drop offset $ cycle10k input
+              offset = mergeNum $ take 7 input
+              result = applyFFT 100 digits
+          putStrLn (show =<< take 8 result)
